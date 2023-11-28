@@ -1,0 +1,47 @@
+# Compilation
+
+To compile the program, enter the fluid folder and open fluid.sln using Visual Studio 2023, then Build the project 'fluid'.
+
+To run the 2D version of the program, uncomment the '#define USE_2D' line in utils.cuh; To run the 3D version of the program, comment it. Then compile the entire solution.
+
+Make sure to rebuild the entire solution after any modification of the setting is conducted.
+
+To execute the program, either use the 'Start Without Debugging' functionality of Visual Studio or execute fluid.exe in the corresponding output folder.
+
+You can change the settings of the picture in the following section of the source code:
+
+1. fps, viscosity, number of frames to generate, width/height of the output image (the project assumes width = height so only width is visible), the buffer size used by WoB algorithm are contained in utils.cuh.
+2. The boundary, density field on the first frame, vorticity on the first frame are contained in kernel.cu.
+
+The program is completed on my own computer, the system is Windows 11 Home Version 10.0.22621 Build 22621.
+
+# Outputs
+
+The program will output a sequence of pictures Framexxxx.png which corresponds the image of simulations at frame xxxx. The files are defaultly located in the output file.
+
+The file removeframe.py is a tiny helping program which removes all generated frames at once.
+
+Some generated sample videos are contained in output folder.
+
+# Objectives
+
+1. Use CUDA as GPU language. The project is indeed based on CUDA.
+2. MC backtracing is implemented for vorticity computation. Done.
+3. Acceleration data structure is added. The grid discretization mentioned in the paper is adopted to accelerate the computation.
+4. Density field is implemented for movement exhibition. Done.
+5. The core algorithm without object interaction in 2D is implemented. Done.
+6. Walk on Boundary method is used replacing the Walk on Surface method. Done and the entire source code is contained in wob.cuh.
+7. The core algorithm with object interaction in 2D is implemented. Done.
+8. The core algorithm without object interaction in 3D is implemented. Done.
+9. Grid cache is implemented for acceleration. Done.
+10. Animation are created with the algorithm. Done.
+
+# External
+
+The project uses glm for CPU/GPU linear algebra computation, which is acquired at https://github.com/g-truc/glm.
+
+lodepng is used for picture output, which is acquired at https://lodev.org/lodepng/.
+
+The modules above are included in vendor folder.
+
+ffmpeg is used for video generation, which is not contained in the solution folder. It can be acquired at https://www.ffmpeg.org/.
