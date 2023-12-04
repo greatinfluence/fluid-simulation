@@ -47,7 +47,7 @@ static __forceinline__ __host__ __device__ unsigned int TransformPos(glm::vec3 x
 }
 
 static __forceinline__ __host__ __device__ unsigned int FixPosition(glm::vec3 x, glm::vec3 normal) {
-    int xpos = (x.x - 0.5f) * width, ypos = (x.y - 0.5f) * width;
+    int xpos = x.x * width - 0.5f, ypos = x.y * width - 0.5f;
     if (xpos < 0) xpos = 0;
     else if (xpos > width - 1) xpos = width - 1;
     else {

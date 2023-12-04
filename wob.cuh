@@ -225,6 +225,26 @@ namespace wob {
         output.normal = glm::vec3(dir.y, -dir.x, 0);
     }
 
+    static __forceinline__ __device__ void SampleEdge(Edge* edges, unsigned int nedge, float* ecdf, HitInfo& output, unsigned int removed, curandState& state) {
+        float val = curand_uniform(&state) * (ecdf[nedge - 1] - ecdf[removed] + (removed != 0 ? ecdf[removed - 1] : 0));
+        if (removed == 0 || val > ecdf[removed - 1]) val += ecdf[removed] - (removed ? ecdf[removed - 1] : 0);
+        unsigned int ind = lower_bound(ecdf, nedge, val);
+        if (ind >= nedge) ind = nedge - 1;
+        glm::vec3 dir = glm::normalize(edges[ind].v2 - edges[ind].v1);
+        output.hitpos = edges[ind].v1 + dir * (val - (ind ? ecdf[ind - 1] : 0));
+        output.normal = glm::vec3(dir.y, -dir.x, 0);
+    }
+
+    static __forceinline__ __device__ float distance(glm::vec3 pos, glm::vec3 v1, glm::vec3 v2) {
+        glm::vec3 ed = v2 - v1;
+        glm::vec3 norm = glm::normalize(glm::vec3(ed.y, -ed.x, 0));
+        float t = glm::dot(v1 - pos, norm);
+        glm::vec3 hitpos = pos + t * norm;
+        if (glm::dot(v1 - hitpos, v2 - hitpos) <= 0) return t;
+        else if (glm::length(v1 - hitpos) < glm::length(v2 - hitpos)) return glm::length(v1 - pos);
+        else return glm::length(v2 - pos);
+    }
+
     __forceinline__ __global__ void wob(
         glm::vec3* vorts,
         Edge* edges, unsigned int nedge,
@@ -257,11 +277,25 @@ namespace wob {
                 return;
             }
         }
+
+        // First, find the nearest edge
+        float dist = 1e10;
+        unsigned int nearest = 0;
+        for (unsigned int i = 0; i < nedge; ++i) {
+            float di = distance(pos, edges[i].v1, edges[i].v2);
+            if (di < dist) {
+                dist = di;
+                nearest = i;
+            }
+        }
+
+        float puni = 1.f * (ecdf[nearest] - (nearest ? ecdf[nearest - 1] : 0)) / ecdf[nedge - 1];
+
         //if(pos.x > 0.4f && pos.x < 0.6f && pos.y > 0.4f && pos.y < 0.6f)
          //   printf("You are not supposed to be here\n");
         constexpr unsigned int nwob = 65536; // The number of times do walk on boundary
         constexpr float RRfactor = 0.8f; // The Russian-Roulette constant
-        constexpr unsigned int max_depth = 4u; // The maximum depth of wob
+        constexpr unsigned int max_depth = 2u; // The maximum depth of wob
 
         Status buf[buffersize / sizeof(Status)]; // Buffer, just buffers
         StatStack ss{buf};
@@ -269,24 +303,58 @@ namespace wob {
         float ansx = 0, ansy = 0;
 
         for (unsigned int time = 0; time < nwob; ++time) {
+            if(true)
             {
                 HitInfo hi;
-                SampleEdge(edges, nedge, ecdf, hi, state);
-                while (glm::length(hi.hitpos - pos) < 1e-4f) {
-                    // Tooo close
-                    SampleEdge(edges, nedge, ecdf, hi, state);
+                constexpr float poss = 0.1f;
+                if (curand_uniform(&state) <= poss) {
+                    SampleEdge(edges, nedge, ecdf, hi, nearest, state);
+                    float coef0 = -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 0) * (1 - puni) / poss;
+                    float coef1 = -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 1) * (1 - puni) / poss;
+
+					ss.push_back(Status{ 1,
+                        coef0,
+                        coef1,
+						glm::vec3(0, 0, 1),
+						hi.hitpos,
+						hi.normal });
+                    glm::vec3 val = glm::vec3(0);
+                    GetVal(hi.hitpos, t, nxvorts, hi.normal, val);
+                    ansx += coef0 * val.x;
+                    ansy += coef1 * val.y;
                 }
+                else {
+                    float t = curand_uniform(&state);
+                    hi.hitpos = edges[nearest].v1 * t + edges[nearest].v2 * (1 - t);
+                    glm::vec3 dir = glm::normalize(edges[nearest].v2 - edges[nearest].v1);
+                    hi.normal = glm::vec3(dir.y, -dir.x, 0);
+                    float coef0 = -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 0) * puni / (1.f - poss);
+                    float coef1 = -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 1) * puni / (1.f - poss);
+					ss.push_back(Status{ 1,
+                        coef0,
+                        coef1,
+						glm::vec3(0, 0, 1),
+						hi.hitpos,
+						hi.normal });
+                    glm::vec3 val = glm::vec3(0);
+                    GetVal(hi.hitpos, t, nxvorts, hi.normal, val);
+                    ansx += coef0 * val.x;
+                    ansy += coef1 * val.y;
+                }
+                
                 //hi.hitpos = hi.hitpos + hi.normal * 1e-5f; // Get it back into the area
-                ss.push_back(Status{ 1,
-                    -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 0), 
-                    -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 1),
-                    glm::vec3(0, 0, 1),
-                    hi.hitpos,
-                    hi.normal });
+            }
+            else {
+					ss.push_back(Status{ 0,
+                        1.f,
+                        1.f,
+						glm::vec3(0, 0, 1),
+						pos,
+					    glm::vec3(0, 0, 1) });
             }
             while (!ss.empty()) {
                 unsigned int const index = ss.sz - 1;
-                Status st = ss.back();
+                Status& st = ss.back();
                 if (st.normal.z < 2) {
                     // Not bounced
                     if (st.depth >= max_depth || st.depth != 0 && curand_uniform(&state) > RRfactor) {
@@ -305,14 +373,14 @@ namespace wob {
                             ansy += st.coefy * val.y * (1 + 1 / RRfactor);
                         }
                        
-                        int cnt = 0;
+                        //int cnt = 0;
                         // Seek for the first bouncing point
                         while (true) {
-                            if (cnt++ > 10000) {
+                            //if (cnt++ > 10000) {
                                 //printf("Cannot find next bouncing point: %f %f %f\n", st.pos.x, st.pos.y, st.pos.z);
-                            }
+                            //}
                             // Loop to make sure hitting the boundary correct times
-                            glm::vec3 dir = st.depth != 0 ? RanddirH2D(st.normal, state) : Randdir2D(state);
+                            glm::vec3 const dir = st.depth != 0 ? RanddirH2D(st.normal, state) : Randdir2D(state);
                             if (!insidetest(st.pos, dir, edges, nedge)) {
                                 //printf("%f %f %f !-> %f %f %f\n", st.pos.x, st.pos.y, st.pos.z, dir.x, dir.y, dir.z);
                                 continue;
@@ -330,17 +398,16 @@ namespace wob {
                             ss.push_back(Status{
                                 st.depth + 1,
                                 st.depth != 0 ? -st.coefx / RRfactor
-                                              : p2Gpxkpny(st.pos - hi.hitpos, -hi.normal, 0) /
-                                                    pGpny(st.pos - hi.hitpos, -hi.normal),
+                                              : 1.f,
                                 st.depth != 0 ? -st.coefy / RRfactor
-                                              : p2Gpxkpny(st.pos - hi.hitpos, -hi.normal, 1) /
-                                                    pGpny(st.pos - hi.hitpos, -hi.normal),
+                                              : 1.f,
                                 dir, hi.hitpos, hi.normal
                             });
                             break;
                         }
                     }
-                    ss.Getcontent(index).normal.z = 3; // Mark as bounced
+                    ss.Getcontent(index).normal.z = 3;
+                    // Mark as bounced
                 }
                 else {
                     ss.pop_back();

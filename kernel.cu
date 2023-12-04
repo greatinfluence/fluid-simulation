@@ -78,6 +78,7 @@ static __forceinline__ __device__ void ComputeVortnDens(glm::vec3 x,
 #endif // USE_2D
 
     glm::vec3 xa = x - dt * v;
+    //float pPhipx = vort.x, pPhipy = vort.y;
     vort = glm::vec3(0);
     den = 0;
     constexpr unsigned int nb = 2048;
@@ -111,8 +112,13 @@ static __forceinline__ __device__ void ComputeVortnDens(glm::vec3 x,
 #endif // USE_3D
         den += dens[ixi];
     }
+#ifdef USE_2D
+    vort.z /= nb;
+#else
     vort /= nb;
+#endif // USE_2D
     den /= nb;
+    den = vorts[ind].x;
 }
 
 __global__ void initialize(curandState* states) {
@@ -229,7 +235,7 @@ int main()
     glm::vec3* dnxvelo = nullptr;
 #endif // USE_2D
 
-    constexpr size_t nedge = 8;
+    constexpr size_t nedge = 4;
     {
         // Memory allocation
 #ifdef USE_2D
@@ -282,7 +288,7 @@ int main()
         edges[1] = {glm::vec3(0, 1, 0), glm::vec3(1, 1, 0)};
         edges[2] = {glm::vec3(1, 1, 0), glm::vec3(1, 0, 0)};
         edges[3] = {glm::vec3(1, 0, 0), glm::vec3(0, 0, 0)};
-        if(true) {
+        if(nedge == 8) {
             edges[4] = { glm::vec3(0.4f, 0.4f, 0), glm::vec3(0.6f, 0.4f, 0) };
             edges[5] = { glm::vec3(0.6f, 0.4f, 0), glm::vec3(0.6f, 0.6f, 0) };
             edges[6] = { glm::vec3(0.6f, 0.6f, 0), glm::vec3(0.4f, 0.6f, 0) };

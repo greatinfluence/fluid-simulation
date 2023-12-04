@@ -40,7 +40,8 @@ __forceinline__ __device__ glm::vec3 Randdir2D(curandState& state) {
 // return a 2D random direction that is in the same hemisphere with N
 __forceinline__ __device__ glm::vec3 RanddirH2D(glm::vec3 N, curandState& state) {
     glm::vec3 D = Randdir2D(state);
-    return glm::dot(D, N) >= 0 ? D : -D;
+    float cs = glm::dot(D, N);
+    return cs < 0 ? D - 2 * cs * N : D;
 }
 
 // Return a sample ~ N(mu, sig^2 * I)
