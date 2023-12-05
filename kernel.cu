@@ -225,6 +225,7 @@ int main()
     float* dcdf = nullptr;
     float* ddens = nullptr;
     float* dnxdens = nullptr;
+    float* dnu = nullptr;
     curandState* dstates = nullptr;
 
 #ifdef USE_2D // Boundary condition only applicable in 2D
@@ -261,6 +262,7 @@ int main()
         checkCudaErrors(cudaMalloc(&ddens, sizeof(float) * width * width));
         checkCudaErrors(cudaMalloc(&dnxdens, sizeof(float) * width * width));
         checkCudaErrors(cudaMalloc(&dstates, sizeof(curandState) * width * width));
+        checkCudaErrors(cudaMalloc(&dnu, sizeof(float) * nsamples));
 #else
         memset(vorts, 0, sizeof(glm::vec3) * width * width * width);
         memset(dens, 0, sizeof(float) * width * width);
@@ -451,7 +453,12 @@ int main()
         std::cerr << "Done computing V0" << std::endl;
 
         // Then, compute Phi using WoB
-        wob::wob <<<grid_size, block_size>>> (dvorts, dedges, nedge, decdf, dnxvorts, dstates, i * dt);
+        wob::wob <<<grid_size, block_size>>> (dnu, dedges, nedge, decdf, dnxvorts, dstates, i * dt);
+        checkCudaErrors(cudaDeviceSynchronize());
+
+        std::cerr << "Done computing Nu" << std::endl;
+
+        wob::integrate <<<grid_size, block_size>>> (dnu, dedges, nedge, decdf, dnxvorts, dvorts, dstates);
         checkCudaErrors(cudaDeviceSynchronize());
 
         std::cerr << "Done computing Phi" << std::endl;
@@ -515,6 +522,7 @@ int main()
 #ifdef USE_2D
         checkCudaErrors(cudaFree(dedges));
         checkCudaErrors(cudaFree(decdf));
+        checkCudaErrors(cudaFree(dnu));
         delete[] ecdf;
         delete[] edges;
 #else

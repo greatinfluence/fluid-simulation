@@ -26,6 +26,7 @@ constexpr int nframe = fps * 1; // Number of frames
 #ifdef USE_2D // 2D setting
 constexpr unsigned int width = 512; // width
 constexpr unsigned int lastind = width * width - 1; // the last valid index
+constexpr unsigned int nsamples = width * width;
 #else // 3D setting
 constexpr unsigned int width = 128; // width
 constexpr unsigned int lastind = width * width * width - 1; // The last valid index

@@ -132,8 +132,7 @@ namespace wob {
 
     struct Status {
         unsigned int depth;
-        float coefx;
-        float coefy;
+        float coef;
         glm::vec3 dir;
         glm::vec3 pos;
         glm::vec3 normal;
@@ -204,7 +203,7 @@ namespace wob {
                     return outcome;
     }
 
-    static __forceinline__ __device__ void GetVal(glm::vec3 pos, float t, glm::vec3* nxvorts, glm::vec3 normal, glm::vec3& output) {
+    static __forceinline__ __device__ void GetVal(glm::vec3 pos, float t, glm::vec3* nxvorts, glm::vec3 normal, float& output) {
         unsigned int clmpedind = FixPosition(pos, normal);
         //glm::vec3 dir = glm::vec3(-normal.y, normal.x, 0);
         float bdval = b(pos, t);
@@ -212,8 +211,7 @@ namespace wob {
         //float dvdx = (bdnval - bdval) * 1e4f;
         //output.x = nxvorts[clmpedind].x + dvdx * dir.x;
         //output.y = nxvorts[clmpedind].y + dvdx * dir.y;
-        output.x = nxvorts[clmpedind].z + bdval;
-        output.y = nxvorts[clmpedind].z + bdval;
+        output = nxvorts[clmpedind].z + bdval;
     }
 
     static __forceinline__ __device__ void SampleEdge(Edge* edges, unsigned int nedge, float* ecdf, HitInfo& output, curandState& state) {
@@ -246,112 +244,51 @@ namespace wob {
     }
 
     __forceinline__ __global__ void wob(
-        glm::vec3* vorts,
+        float* nu,
         Edge* edges, unsigned int nedge,
         float* ecdf,
         glm::vec3* nxvorts, curandState* states,
         float t) {
         unsigned int const ind = blockIdx.x * blockDim.x + threadIdx.x;
-        unsigned int const y = ind / width;
-        unsigned int const x = ind % width;
-        curandState& state = states[ind];
-        auto const pos = glm::vec3((x + 0.5f) / width, (y + 0.5f) / width, 0);
-        //printf("%u start\n", ind);
-        // Compute pPhi/px, pPhi/py and store in nxvorts[ind].x, nxvorts[ind].y
+        unsigned int edgeid =
+            lower_bound(ecdf, nedge, ecdf[nedge - 1] * ind / (nsamples - 1));
+        if (edgeid >= nedge) edgeid = nedge - 1;
 
-        //return;
+        glm::vec3 pos, norm;
         {
-            // Inside-outside test to expell all points that is outside our focusing area
-            unsigned int success = 0u;
-            for(unsigned int i = 0; i < 7; ++ i)
-                if (isInside(pos, edges, nedge, state)) {
-                    success++;
-                }
+            unsigned int const begsample = // The first sample on this edge
+                (edgeid ? floor((nsamples - 1) * ecdf[edgeid - 1] / ecdf[nedge - 1]) : 0);
 
-            if (success < 5u) {
-                // Does not pass the test, set Phi = V0
-                //if(pos.x < 0.4f || pos.x > 0.6f || pos.y < 0.4f || pos.y > 0.6f)
-                //    printf("You shall pass: %f %f %f -> %u\n", pos.x, pos.y, pos.z, success);
-                vorts[ind].x = nxvorts[ind].x;
-                vorts[ind].y = nxvorts[ind].y;
-                return;
-            }
+            unsigned int const assignedsample = // The number of samples on this edge
+                floor((nsamples - 1) * ecdf[edgeid] / ecdf[nedge - 1]) - begsample + 1;
+        
+            float t = (ind - begsample + .5f) / assignedsample;
+            
+            glm::vec3 dir = edges[edgeid].v2 - edges[edgeid].v1;
+
+            pos = edges[edgeid].v1 + t * dir;
+            
+            norm = glm::normalize(glm::vec3(dir.y, -dir.x, 0));
         }
 
-        // First, find the nearest edge
-        float dist = 1e10;
-        unsigned int nearest = 0;
-        for (unsigned int i = 0; i < nedge; ++i) {
-            float di = distance(pos, edges[i].v1, edges[i].v2);
-            if (di < dist) {
-                dist = di;
-                nearest = i;
-            }
-        }
+        curandState& state = states[ind];
 
-        float puni = 1.f * (ecdf[nearest] - (nearest ? ecdf[nearest - 1] : 0)) / ecdf[nedge - 1];
-
-        //if(pos.x > 0.4f && pos.x < 0.6f && pos.y > 0.4f && pos.y < 0.6f)
-         //   printf("You are not supposed to be here\n");
-        constexpr unsigned int nwob = 65536; // The number of times do walk on boundary
+        constexpr unsigned int nwob = 4; // The number of times do walk on boundary
         constexpr float RRfactor = 0.8f; // The Russian-Roulette constant
         constexpr unsigned int max_depth = 2u; // The maximum depth of wob
 
         Status buf[buffersize / sizeof(Status)]; // Buffer, just buffers
         StatStack ss{buf};
 
-        float ansx = 0, ansy = 0;
+        float ans = 0;
 
         for (unsigned int time = 0; time < nwob; ++time) {
-            if(true)
-            {
-                HitInfo hi;
-                constexpr float poss = 0.1f;
-                if (curand_uniform(&state) <= poss) {
-                    SampleEdge(edges, nedge, ecdf, hi, nearest, state);
-                    float coef0 = -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 0) * (1 - puni) / poss;
-                    float coef1 = -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 1) * (1 - puni) / poss;
+			ss.push_back(Status{ 0,
+				1.f,
+				glm::vec3(0, 0, 1),
+				pos,
+				norm });
 
-					ss.push_back(Status{ 1,
-                        coef0,
-                        coef1,
-						glm::vec3(0, 0, 1),
-						hi.hitpos,
-						hi.normal });
-                    glm::vec3 val = glm::vec3(0);
-                    GetVal(hi.hitpos, t, nxvorts, hi.normal, val);
-                    ansx += coef0 * val.x;
-                    ansy += coef1 * val.y;
-                }
-                else {
-                    float t = curand_uniform(&state);
-                    hi.hitpos = edges[nearest].v1 * t + edges[nearest].v2 * (1 - t);
-                    glm::vec3 dir = glm::normalize(edges[nearest].v2 - edges[nearest].v1);
-                    hi.normal = glm::vec3(dir.y, -dir.x, 0);
-                    float coef0 = -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 0) * puni / (1.f - poss);
-                    float coef1 = -p2Gpxkpny(pos - hi.hitpos, -hi.normal, 1) * puni / (1.f - poss);
-					ss.push_back(Status{ 1,
-                        coef0,
-                        coef1,
-						glm::vec3(0, 0, 1),
-						hi.hitpos,
-						hi.normal });
-                    glm::vec3 val = glm::vec3(0);
-                    GetVal(hi.hitpos, t, nxvorts, hi.normal, val);
-                    ansx += coef0 * val.x;
-                    ansy += coef1 * val.y;
-                }
-                
-                //hi.hitpos = hi.hitpos + hi.normal * 1e-5f; // Get it back into the area
-            }
-            else {
-					ss.push_back(Status{ 0,
-                        1.f,
-                        1.f,
-						glm::vec3(0, 0, 1),
-						pos,
-					    glm::vec3(0, 0, 1) });
-            }
             while (!ss.empty()) {
                 unsigned int const index = ss.sz - 1;
                 Status& st = ss.back();
@@ -359,18 +296,16 @@ namespace wob {
                     // Not bounced
                     if (st.depth >= max_depth || st.depth != 0 && curand_uniform(&state) > RRfactor) {
                         // Terminate here
-                        glm::vec3 val = glm::vec3(0);
+                        float val = 0;
                         GetVal(st.pos, t, nxvorts, st.normal, val);
-                        ansx += st.coefx * val.x;
-                        ansy += st.coefy * val.y;
+                        ans += st.coef * val;
                     }
                     else { // Can keep bouncing
                         // First compute the contribution
                         if (st.depth) {
-                            glm::vec3 val = glm::vec3(0);
+                            float val = 0;
                             GetVal(st.pos, t, nxvorts, st.normal, val);
-                            ansx += st.coefx * val.x * (1 + 1 / RRfactor);
-                            ansy += st.coefy * val.y * (1 + 1 / RRfactor);
+                            ans += st.coef * val * (1 + 1 / RRfactor);
                         }
                        
                         //int cnt = 0;
@@ -397,9 +332,7 @@ namespace wob {
                             }
                             ss.push_back(Status{
                                 st.depth + 1,
-                                st.depth != 0 ? -st.coefx / RRfactor
-                                              : 1.f,
-                                st.depth != 0 ? -st.coefy / RRfactor
+                                st.depth != 0 ? -st.coef / RRfactor
                                               : 1.f,
                                 dir, hi.hitpos, hi.normal
                             });
@@ -412,7 +345,7 @@ namespace wob {
                 else {
                     ss.pop_back();
 
-                    if (st.depth > 1) {
+                    if (st.depth > 0) {
                         // Seek for the next hit point
 
                         HitInfo hi;
@@ -422,20 +355,87 @@ namespace wob {
                             // A hit
                             ss.push_back(Status{
                                 st.depth,
-                                -st.coefx,
-                                -st.coefy,
+                                -st.coef,
                                 st.dir, hi.hitpos, hi.normal
                             });
                         }
                     }
                 }
             }
-               // printf(")");
         }
-        //printf("%u end\n", ind);
-        vorts[ind].x = ansx / nwob;
-        vorts[ind].y = ansy / nwob;
+        {
+            float val = 0;
+            GetVal(pos, t, nxvorts, norm, val);
+            nu[ind] = 2 * val - 2 * ans / nwob;
+        }
         // End of computation
+    }
+
+    static __forceinline__ __device__ float Simpson(glm::vec3 const pos, float const lt, float const rt, Edge const ed, glm::vec3 const norm, int const dim) {
+        float md = (lt + rt) / 2;
+        float lmd = (lt + md) / 2, rmd = (md + rt) / 2;
+        glm::vec3 lp = ed.v1 * (1 - lt) + ed.v2 * lt, rp = ed.v1 * (1 - rt) + ed.v2 * rt, mp = ed.v1 * (1 - md) + ed.v2 * md;
+        glm::vec3 llp = ed.v1 * (1 - lmd) + ed.v2 * lmd, rrp = ed.v1 * (1 - rmd) + ed.v2 * rmd;
+        float val = 
+            (p2Gpxkpny(pos - lp, norm, dim) + 4 * p2Gpxkpny(pos - mp, norm, dim) + p2Gpxkpny(pos - rp, norm, dim)) / 6;
+        float lval =
+            (p2Gpxkpny(pos - lp, norm, dim) + 4 * p2Gpxkpny(pos - llp, norm, dim) + p2Gpxkpny(pos - mp, norm, dim)) / 6;
+        float rval =
+            (p2Gpxkpny(pos - md, norm, dim) + 4 * p2Gpxkpny(pos - rrp, norm, dim) + p2Gpxkpny(pos - rp, norm, dim)) / 6;
+        if (fabs(val * 2 - lval - rval) < 2e-3f) return lval + rval;
+        //printf("%f %f: %f\n", lt, rt, val * 2 - lval - rval);
+        return Simpson(pos, lt, md, ed, norm, dim) + Simpson(pos, md, rt, ed, norm, dim);
+    }
+
+    // Do manual integration
+    __forceinline__ __global__ void integrate(float* nu, Edge* edges, unsigned int nedge, float* ecdf, glm::vec3* pV0, glm::vec3* output, curandState* states) {
+        unsigned int const ind = blockIdx.x * blockDim.x + threadIdx.x;
+        unsigned int const y = ind / width, x = ind % width;
+        curandState& state = states[ind];
+        glm::vec3 const pos = glm::vec3((x + 0.5f) / width, (y + 0.5f) / width, 0);
+        {
+            // Inside-outside test to expell all points that is outside our focusing area
+            unsigned int success = 0u;
+            for (unsigned int i = 0; i < 7; ++i)
+                if (isInside(pos, edges, nedge, state)) {
+                    success++;
+                }
+
+            if (success < 5u) {
+                // Does not pass the test, set Phi = V0
+                //if(pos.x < 0.4f || pos.x > 0.6f || pos.y < 0.4f || pos.y > 0.6f)
+                //    printf("You shall pass: %f %f %f -> %u\n", pos.x, pos.y, pos.z, success);
+                output[ind].x = pV0[ind].x;
+                output[ind].y = pV0[ind].y;
+                return;
+            }
+        }
+
+        float ansx = 0, ansy = 0;
+
+        for (unsigned int edgeid = 0; edgeid < nedge; ++edgeid) {
+            unsigned int const begsample = // The first sample on this edge
+                (edgeid ? floor((nsamples - 1) * ecdf[edgeid - 1] / ecdf[nedge - 1]) : 0);
+
+            unsigned int const assignedsample = // The number of samples on this edge
+                floor((nsamples - 1) * ecdf[edgeid] / ecdf[nedge - 1]) - begsample + 1;
+		    
+            glm::vec3 const dir = edges[edgeid].v2 - edges[edgeid].v1;
+
+            glm::vec3 const norm = glm::normalize(glm::vec3(dir.y, -dir.x, 0));
+
+            for (unsigned int sampid = 0; sampid < assignedsample; ++sampid) {
+			    float const lt = (1.f * sampid - begsample) / assignedsample;
+                float const rt = (1.f * sampid - begsample + 1) / assignedsample;
+                {
+                    float t = (lt + rt) / 2;
+                    ansx -= Simpson(pos, lt, rt, edges[edgeid], -norm, 0) * nu[edgeid] * (rt - lt) * glm::length(dir);
+                    ansy -= Simpson(pos, lt, rt, edges[edgeid], -norm, 1) * nu[edgeid] * (rt - lt) * glm::length(dir);
+                }
+            }
+        }
+        output[ind].x = ansx;
+        output[ind].y = ansy;
     }
 }
 #endif // USE_2D
